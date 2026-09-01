@@ -19,9 +19,11 @@ describe('MapStore (Zustand)', () => {
       history: [
         {
           map: {
+            version: initialMap.version,
             name: initialMap.name,
             width: initialMap.width,
             height: initialMap.height,
+            tileSize: initialMap.tileSize,
             tiles: new Map(initialMap.tiles),
             entities: initialMap.entities.map((e) => ({ ...e })),
             metadata: { ...initialMap.metadata },

@@ -1,26 +1,38 @@
-import { MapEditor, Toolbar, PropertiesPanel, FileMenu } from './components';
+import { useState } from 'react';
+import {
+  FileMenu,
+  Toolbar,
+  EntityPalette,
+  MapEditor,
+  PropertiesPanel,
+  StatusBar,
+} from './components';
 
-/**
- * Main application component
- * Integrates editor, toolbar, file menu, and properties panel
- */
 export default function App() {
+  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
+
   return (
-    <div className="flex flex-col h-screen bg-gray-900 text-white">
-      {/* File operations */}
+    <div className="flex flex-col h-screen w-screen bg-gray-950 text-white overflow-hidden select-none font-sans">
+      {/* Top File Menu */}
       <FileMenu />
 
-      {/* Main toolbar */}
+      {/* Main Editing Toolbar */}
       <Toolbar />
 
-      {/* Editor workspace */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Canvas editor */}
-        <MapEditor />
+      {/* Main Workspace */}
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Left Entity & Tile Palette */}
+        <EntityPalette />
 
-        {/* Properties panel */}
+        {/* Center Interactive Map Canvas */}
+        <MapEditor onZoomChange={setZoomLevel} />
+
+        {/* Right Entity & Map Properties Panel */}
         <PropertiesPanel />
       </div>
+
+      {/* Bottom Status Bar */}
+      <StatusBar zoomLevel={zoomLevel} />
     </div>
   );
 }

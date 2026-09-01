@@ -24,6 +24,7 @@ describe('MapCanvas', () => {
       lineTo: jest.fn(),
       stroke: jest.fn(),
       fill: jest.fn(),
+      setLineDash: jest.fn(),
       clearRect: jest.fn(),
       fillText: jest.fn(),
       measureText: jest.fn(() => ({ width: 0 })),

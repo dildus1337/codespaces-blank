@@ -1,36 +1,30 @@
 /**
- * Canvas-based map editor implementation.
- * Handles rendering (tiles, entities, layers) and viewport management.
- * Decoupled from React - can be used standalone or with any UI framework.
+ * Canvas-based map editor implementation for Doom 2D Forever.
+ * Handles rendering (tiles, entities, layers, previews, connections) and viewport management.
  */
 
-import { MapData, Entity, TileType, Position, getTileKey } from '../entities/types';
+import {
+  MapData,
+  Entity,
+  TileType,
+  Position,
+  getTileKey,
+  Monster,
+  Item,
+  Spawn,
+  Trigger,
+} from '../entities/types';
 
-/**
- * Viewport configuration (camera position and zoom)
- */
 export interface Viewport {
   x: number;
   y: number;
   scale: number; // zoom level (1.0 = 100%)
 }
 
-/**
- * Layer rendering order
- */
-enum RenderLayer {
-  TILES = 0,
-  ENTITIES = 1,
-  SELECTION = 2,
-  GRID = 3,
-}
-
-/**
- * Color theme for rendering
- */
 export interface RenderTheme {
   tileSize: number;
   gridColor: string;
+  gridSubColor: string;
   tileColors: Record<TileType, string>;
   entityColor: string;
   selectedColor: string;
@@ -38,30 +32,39 @@ export interface RenderTheme {
   backgroundColor: string;
 }
 
-/**
- * Default render theme
- */
 export const DEFAULT_THEME: RenderTheme = {
   tileSize: 32,
-  gridColor: '#333333',
+  gridColor: 'rgba(255, 255, 255, 0.15)',
+  gridSubColor: 'rgba(255, 255, 255, 0.05)',
   tileColors: {
-    EMPTY: '#1a1a1a',
-    WALL: '#444444',
-    PLATFORM: '#666666',
-    LAVA: '#ff4500',
-    WATER: '#0066ff',
-    SPIKE: '#ff0000',
-    TELEPORT: '#ff00ff',
+    EMPTY: 'transparent',
+    WALL: '#5a5a64',
+    PLATFORM: '#3b82f6',
+    LAVA: '#ef4444',
+    WATER: '#06b6d4',
+    SPIKE: '#eab308',
+    TELEPORT: '#a855f7',
   },
-  entityColor: '#00ff00',
-  selectedColor: '#ffff00',
-  hoverColor: '#ffaa00',
-  backgroundColor: '#000000',
+  entityColor: '#22c55e',
+  selectedColor: '#fbbf24',
+  hoverColor: '#38bdf8',
+  backgroundColor: '#121214',
 };
 
-/**
- * Canvas editor - non-React rendering engine
- */
+export interface EditorPreviewState {
+  tool: 'select' | 'tile_pencil' | 'tile_rect' | 'tile_eraser' | 'tile_fill' | 'entity_place';
+  tileType: TileType;
+  brushSize: number;
+  rectStart: Position | null;
+  rectCurrent: Position | null;
+  selectedEntityId: string | null;
+  showGrid: boolean;
+  showTiles: boolean;
+  showEntities: boolean;
+  gridSize: number;
+  entityTemplate: Partial<Entity> | null;
+}
+
 export class MapCanvas {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -70,6 +73,23 @@ export class MapCanvas {
   private theme: RenderTheme;
   private hoveredEntityId: string | null = null;
   private mousePos: Position = { x: 0, y: 0 };
+  private previewState: EditorPreviewState = {
+    tool: 'select',
+    tileType: TileType.WALL,
+    brushSize: 1,
+    rectStart: null,
+    rectCurrent: null,
+    selectedEntityId: null,
+    showGrid: true,
+    showTiles: true,
+    showEntities: true,
+    gridSize: 32,
+    entityTemplate: null,
+  };
+
+  private boundMouseMove: (e: MouseEvent) => void;
+  private boundWheel: (e: WheelEvent) => void;
+  private boundMouseDown: (e: MouseEvent) => void;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -89,70 +109,56 @@ export class MapCanvas {
       scale: 1.0,
     };
 
+    this.boundMouseMove = (e: MouseEvent) => this.onMouseMove(e);
+    this.boundWheel = (e: WheelEvent) => this.onWheel(e);
+    this.boundMouseDown = (e: MouseEvent) => this.onMouseDown(e);
+
     this.setupEventListeners();
   }
 
-  /**
-   * Update map data
-   */
   public setMap(map: MapData) {
     this.map = map;
   }
 
-  /**
-   * Get current map
-   */
   public getMap(): MapData {
     return this.map;
   }
 
-  /**
-   * Set viewport position
-   */
+  public setPreviewState(preview: Partial<EditorPreviewState>) {
+    this.previewState = { ...this.previewState, ...preview };
+  }
+
   public setViewport(x: number, y: number, scale: number = this.viewport.scale) {
     this.viewport.x = x;
     this.viewport.y = y;
-    this.viewport.scale = Math.max(0.1, Math.min(5.0, scale)); // Clamp zoom
+    this.viewport.scale = Math.max(0.1, Math.min(5.0, scale));
   }
 
-  /**
-   * Get viewport
-   */
   public getViewport(): Viewport {
     return { ...this.viewport };
   }
 
-  /**
-   * Pan viewport
-   */
   public pan(dx: number, dy: number) {
     this.viewport.x += dx;
     this.viewport.y += dy;
   }
 
-  /**
-   * Zoom viewport (at mouse position if provided)
-   */
   public zoom(factor: number, mousePos?: Position) {
     const oldScale = this.viewport.scale;
     const newScale = oldScale * factor;
     const clampedScale = Math.max(0.1, Math.min(5.0, newScale));
 
     if (mousePos && oldScale !== clampedScale) {
-      // Zoom towards mouse position
-      const worldX = (mousePos.x / this.canvas.width) * this.canvas.width + this.viewport.x;
-      const worldY = (mousePos.y / this.canvas.height) * this.canvas.height + this.viewport.y;
+      const worldX = mousePos.x / oldScale + this.viewport.x;
+      const worldY = mousePos.y / oldScale + this.viewport.y;
 
-      this.viewport.x = worldX - (mousePos.x / this.canvas.width) * this.canvas.width;
-      this.viewport.y = worldY - (mousePos.y / this.canvas.height) * this.canvas.height;
+      this.viewport.x = worldX - mousePos.x / clampedScale;
+      this.viewport.y = worldY - mousePos.y / clampedScale;
     }
 
     this.viewport.scale = clampedScale;
   }
 
-  /**
-   * Convert screen coordinates to world coordinates
-   */
   public screenToWorld(screenX: number, screenY: number): Position {
     return {
       x: screenX / this.viewport.scale + this.viewport.x,
@@ -160,9 +166,6 @@ export class MapCanvas {
     };
   }
 
-  /**
-   * Convert world coordinates to screen coordinates
-   */
   public worldToScreen(worldX: number, worldY: number): Position {
     return {
       x: (worldX - this.viewport.x) * this.viewport.scale,
@@ -170,11 +173,7 @@ export class MapCanvas {
     };
   }
 
-  /**
-   * Get entity at world position
-   */
   public getEntityAtPosition(worldX: number, worldY: number): Entity | null {
-    // Check in reverse order (top layer first)
     for (let i = this.map.entities.length - 1; i >= 0; i--) {
       const entity = this.map.entities[i];
       if (
@@ -189,137 +188,357 @@ export class MapCanvas {
     return null;
   }
 
-  /**
-   * Main render method - draws all layers
-   */
   public render() {
-    // Clear canvas
     this.ctx.fillStyle = this.theme.backgroundColor;
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-    // Render layers in order
-    this.renderTiles();
-    this.renderEntities();
+    // Map bounds background
+    const mapTopLeft = this.worldToScreen(0, 0);
+    const mapWidth = this.map.width * this.theme.tileSize * this.viewport.scale;
+    const mapHeight = this.map.height * this.theme.tileSize * this.viewport.scale;
+
+    this.ctx.fillStyle = '#18181c';
+    this.ctx.fillRect(mapTopLeft.x, mapTopLeft.y, mapWidth, mapHeight);
+
+    // Outer border of map area
+    this.ctx.strokeStyle = '#3f3f46';
+    this.ctx.lineWidth = 2;
+    this.ctx.strokeRect(mapTopLeft.x, mapTopLeft.y, mapWidth, mapHeight);
+
+    if (this.previewState.showTiles) {
+      this.renderTiles();
+    }
+
+    if (this.previewState.showEntities) {
+      this.renderTriggerLines();
+      this.renderEntities();
+    }
+
     this.renderSelection();
-    this.renderGrid();
+    this.renderPreviews();
+
+    if (this.previewState.showGrid) {
+      this.renderGrid();
+    }
   }
 
-  /**
-   * Render tile layer
-   */
   private renderTiles() {
     const tileSize = this.theme.tileSize * this.viewport.scale;
-    const startX = Math.floor(this.viewport.x / this.theme.tileSize);
-    const startY = Math.floor(this.viewport.y / this.theme.tileSize);
-    const endX = Math.ceil(
-      (this.viewport.x + this.canvas.width / this.viewport.scale) / this.theme.tileSize
+    const startX = Math.max(0, Math.floor(this.viewport.x / this.theme.tileSize));
+    const startY = Math.max(0, Math.floor(this.viewport.y / this.theme.tileSize));
+    const endX = Math.min(
+      this.map.width,
+      Math.ceil((this.viewport.x + this.canvas.width / this.viewport.scale) / this.theme.tileSize)
     );
-    const endY = Math.ceil(
-      (this.viewport.y + this.canvas.height / this.viewport.scale) / this.theme.tileSize
+    const endY = Math.min(
+      this.map.height,
+      Math.ceil((this.viewport.y + this.canvas.height / this.viewport.scale) / this.theme.tileSize)
     );
 
-    // Render filled tiles
     for (let y = startY; y < endY; y++) {
       for (let x = startX; x < endX; x++) {
         const key = getTileKey(x, y);
         const tileType = this.map.tiles.get(key);
 
-        if (tileType) {
+        if (tileType && tileType !== TileType.EMPTY) {
           const screenPos = this.worldToScreen(x * this.theme.tileSize, y * this.theme.tileSize);
-          this.ctx.fillStyle = this.theme.tileColors[tileType];
-          this.ctx.fillRect(screenPos.x, screenPos.y, tileSize, tileSize);
+          this.drawStylizedTile(tileType, screenPos.x, screenPos.y, tileSize);
         }
       }
     }
   }
 
-  /**
-   * Render entity layer
-   */
+  private drawStylizedTile(type: TileType, x: number, y: number, size: number) {
+    const baseColor = this.theme.tileColors[type] || '#555';
+    this.ctx.fillStyle = baseColor;
+    this.ctx.fillRect(x, y, size, size);
+
+    if (type === TileType.WALL) {
+      this.ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      this.ctx.lineWidth = 1;
+      this.ctx.strokeRect(x + 1, y + 1, size - 2, size - 2);
+      this.ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      this.ctx.beginPath();
+      this.ctx.moveTo(x, y + size / 2);
+      this.ctx.lineTo(x + size, y + size / 2);
+      this.ctx.stroke();
+    } else if (type === TileType.PLATFORM) {
+      this.ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      this.ctx.fillRect(x, y, size, Math.max(2, size * 0.15));
+      this.ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      this.ctx.lineWidth = 1;
+      this.ctx.strokeRect(x, y, size, size);
+    } else if (type === TileType.LAVA) {
+      this.ctx.fillStyle = '#f59e0b';
+      this.ctx.fillRect(x + size * 0.1, y + size * 0.2, size * 0.3, size * 0.3);
+      this.ctx.fillRect(x + size * 0.6, y + size * 0.5, size * 0.25, size * 0.25);
+    } else if (type === TileType.WATER) {
+      this.ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      this.ctx.fillRect(x, y + size * 0.2, size, Math.max(1, size * 0.1));
+      this.ctx.fillRect(x, y + size * 0.6, size, Math.max(1, size * 0.1));
+    } else if (type === TileType.SPIKE) {
+      this.ctx.fillStyle = '#dc2626';
+      this.ctx.beginPath();
+      this.ctx.moveTo(x, y + size);
+      this.ctx.lineTo(x + size / 2, y);
+      this.ctx.lineTo(x + size, y + size);
+      this.ctx.closePath();
+      this.ctx.fill();
+    } else if (type === TileType.TELEPORT) {
+      this.ctx.fillStyle = '#e879f9';
+      this.ctx.beginPath();
+      this.ctx.arc(x + size / 2, y + size / 2, size * 0.35, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+
+  private renderTriggerLines() {
+    this.ctx.save();
+    this.ctx.setLineDash([4, 4]);
+    this.ctx.lineWidth = 1.5;
+    this.ctx.strokeStyle = '#f59e0b';
+
+    for (const entity of this.map.entities) {
+      if (entity.type === 'trigger' && (entity as Trigger).targetId) {
+        const target = this.map.entities.find((e) => e.id === (entity as Trigger).targetId);
+        if (target) {
+          const from = this.worldToScreen(
+            entity.position.x + entity.width / 2,
+            entity.position.y + entity.height / 2
+          );
+          const to = this.worldToScreen(
+            target.position.x + target.width / 2,
+            target.position.y + target.height / 2
+          );
+
+          this.ctx.beginPath();
+          this.ctx.moveTo(from.x, from.y);
+          this.ctx.lineTo(to.x, to.y);
+          this.ctx.stroke();
+        }
+      }
+    }
+    this.ctx.restore();
+  }
+
   private renderEntities() {
     for (const entity of this.map.entities) {
       const screenPos = this.worldToScreen(entity.position.x, entity.position.y);
       const screenWidth = entity.width * this.viewport.scale;
       const screenHeight = entity.height * this.viewport.scale;
 
-      // Determine color
-      let color = this.theme.entityColor;
-      if (this.hoveredEntityId === entity.id) {
-        color = this.theme.hoverColor;
+      const isSelected = this.previewState.selectedEntityId === entity.id;
+      const isHovered = this.hoveredEntityId === entity.id;
+
+      let bgColor = '#334155';
+      let borderColor = '#64748b';
+      let icon = 'E';
+      let label: string = entity.type;
+
+      if (entity.type === 'monster') {
+        const m = entity as Monster;
+        bgColor = '#7f1d1d';
+        borderColor = '#ef4444';
+        icon = '👹';
+        label = m.monsterType;
+      } else if (entity.type === 'item') {
+        const item = entity as Item;
+        bgColor = '#1e3a8a';
+        borderColor = '#3b82f6';
+        icon = '🔫';
+        label = item.itemType;
+      } else if (entity.type === 'spawn') {
+        const sp = entity as Spawn;
+        bgColor = '#14532d';
+        borderColor = '#22c55e';
+        icon = '🚩';
+        label = sp.spawnType;
+      } else if (entity.type === 'trigger') {
+        const tr = entity as Trigger;
+        bgColor = 'rgba(180, 83, 9, 0.4)';
+        borderColor = '#f59e0b';
+        icon = '⚡';
+        label = tr.action;
       }
 
-      // Draw entity rectangle
-      this.ctx.fillStyle = color;
+      if (isHovered && !isSelected) {
+        borderColor = this.theme.hoverColor;
+      }
+
+      this.ctx.fillStyle = bgColor;
       this.ctx.fillRect(screenPos.x, screenPos.y, screenWidth, screenHeight);
 
-      // Draw border
-      this.ctx.strokeStyle = color;
-      this.ctx.lineWidth = 1;
+      this.ctx.strokeStyle = borderColor;
+      this.ctx.lineWidth = isSelected ? 2.5 : 1.5;
+      if (entity.type === 'trigger') {
+        this.ctx.setLineDash([3, 3]);
+      }
       this.ctx.strokeRect(screenPos.x, screenPos.y, screenWidth, screenHeight);
+      if (this.ctx.setLineDash) this.ctx.setLineDash([]);
 
-      // Draw entity type indicator
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.font = '10px monospace';
-      this.ctx.fillText(entity.type.toUpperCase()[0], screenPos.x + 2, screenPos.y + 10);
+      // Entity Icon / Glyph
+      if (screenWidth >= 16 && screenHeight >= 16) {
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.font = `${Math.max(10, Math.min(18, Math.floor(screenWidth * 0.4)))}px sans-serif`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(icon, screenPos.x + screenWidth / 2, screenPos.y + screenHeight / 2);
+
+        // Text label
+        if (screenWidth >= 32 && this.viewport.scale >= 0.75) {
+          this.ctx.fillStyle = '#e2e8f0';
+          this.ctx.font = '9px monospace';
+          this.ctx.textAlign = 'center';
+          const shortLabel = label.replace(/^(WEAPON_|AMMO_|HEALTH_|ARMOR_|PLAYER_)/, '');
+          this.ctx.fillText(shortLabel.slice(0, 10), screenPos.x + screenWidth / 2, screenPos.y + screenHeight + 9);
+        }
+      }
     }
   }
 
-  /**
-   * Render selection overlay
-   */
   private renderSelection() {
-    // Selection can be implemented by tracking selected entity from store
-    // For now, this is a placeholder
+    if (!this.previewState.selectedEntityId) return;
+    const entity = this.map.entities.find((e) => e.id === this.previewState.selectedEntityId);
+    if (!entity) return;
+
+    const screenPos = this.worldToScreen(entity.position.x, entity.position.y);
+    const screenWidth = entity.width * this.viewport.scale;
+    const screenHeight = entity.height * this.viewport.scale;
+
+    // Glowing selection outline
+    this.ctx.strokeStyle = '#facc15';
+    this.ctx.lineWidth = 2;
+    this.ctx.strokeRect(screenPos.x - 2, screenPos.y - 2, screenWidth + 4, screenHeight + 4);
+
+    // Corner resize handles
+    const handleSize = 6;
+    this.ctx.fillStyle = '#fbbf24';
+    const corners = [
+      { x: screenPos.x - 2 - handleSize / 2, y: screenPos.y - 2 - handleSize / 2 },
+      { x: screenPos.x + screenWidth + 2 - handleSize / 2, y: screenPos.y - 2 - handleSize / 2 },
+      { x: screenPos.x - 2 - handleSize / 2, y: screenPos.y + screenHeight + 2 - handleSize / 2 },
+      { x: screenPos.x + screenWidth + 2 - handleSize / 2, y: screenPos.y + screenHeight + 2 - handleSize / 2 },
+    ];
+    for (const c of corners) {
+      this.ctx.fillRect(c.x, c.y, handleSize, handleSize);
+    }
   }
 
-  /**
-   * Render grid
-   */
+  private renderPreviews() {
+    const { tool, brushSize, rectStart, rectCurrent, entityTemplate } = this.previewState;
+
+    if (tool === 'tile_pencil' || tool === 'tile_eraser') {
+      const worldPos = this.screenToWorld(this.mousePos.x, this.mousePos.y);
+      const tileX = Math.floor(worldPos.x / this.theme.tileSize);
+      const tileY = Math.floor(worldPos.y / this.theme.tileSize);
+
+      const offset = Math.floor((brushSize - 1) / 2);
+      const startX = tileX - offset;
+      const startY = tileY - offset;
+
+      for (let dy = 0; dy < brushSize; dy++) {
+        for (let dx = 0; dx < brushSize; dx++) {
+          const curX = startX + dx;
+          const curY = startY + dy;
+          if (curX >= 0 && curX < this.map.width && curY >= 0 && curY < this.map.height) {
+            const screenPos = this.worldToScreen(curX * this.theme.tileSize, curY * this.theme.tileSize);
+            const size = this.theme.tileSize * this.viewport.scale;
+
+            if (tool === 'tile_pencil') {
+              this.ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+              this.ctx.fillRect(screenPos.x, screenPos.y, size, size);
+              this.ctx.strokeStyle = '#3b82f6';
+              this.ctx.lineWidth = 1;
+              this.ctx.strokeRect(screenPos.x, screenPos.y, size, size);
+            } else {
+              this.ctx.fillStyle = 'rgba(239, 68, 68, 0.4)';
+              this.ctx.fillRect(screenPos.x, screenPos.y, size, size);
+              this.ctx.strokeStyle = '#ef4444';
+              this.ctx.lineWidth = 1;
+              this.ctx.strokeRect(screenPos.x, screenPos.y, size, size);
+            }
+          }
+        }
+      }
+    } else if (tool === 'tile_rect' && rectStart && rectCurrent) {
+      const minTileX = Math.max(0, Math.min(rectStart.x, rectCurrent.x));
+      const maxTileX = Math.min(this.map.width - 1, Math.max(rectStart.x, rectCurrent.x));
+      const minTileY = Math.max(0, Math.min(rectStart.y, rectCurrent.y));
+      const maxTileY = Math.min(this.map.height - 1, Math.max(rectStart.y, rectCurrent.y));
+
+      const screenTopLeft = this.worldToScreen(
+        minTileX * this.theme.tileSize,
+        minTileY * this.theme.tileSize
+      );
+      const width = (maxTileX - minTileX + 1) * this.theme.tileSize * this.viewport.scale;
+      const height = (maxTileY - minTileY + 1) * this.theme.tileSize * this.viewport.scale;
+
+      this.ctx.fillStyle = 'rgba(59, 130, 246, 0.35)';
+      this.ctx.fillRect(screenTopLeft.x, screenTopLeft.y, width, height);
+      this.ctx.strokeStyle = '#60a5fa';
+      this.ctx.lineWidth = 2;
+      this.ctx.strokeRect(screenTopLeft.x, screenTopLeft.y, width, height);
+    } else if (tool === 'entity_place' && entityTemplate) {
+      const worldPos = this.screenToWorld(this.mousePos.x, this.mousePos.y);
+      const w = entityTemplate.width || 32;
+      const h = entityTemplate.height || 32;
+      const screenPos = this.worldToScreen(worldPos.x - w / 2, worldPos.y - h / 2);
+      const sw = w * this.viewport.scale;
+      const sh = h * this.viewport.scale;
+
+      this.ctx.fillStyle = 'rgba(34, 197, 94, 0.4)';
+      this.ctx.fillRect(screenPos.x, screenPos.y, sw, sh);
+      this.ctx.strokeStyle = '#22c55e';
+      this.ctx.lineWidth = 2;
+      this.ctx.strokeRect(screenPos.x, screenPos.y, sw, sh);
+    }
+  }
+
   private renderGrid() {
-    const tileSize = this.theme.tileSize * this.viewport.scale;
-    const startX = Math.floor(this.viewport.x / this.theme.tileSize);
-    const startY = Math.floor(this.viewport.y / this.theme.tileSize);
-    const endX = Math.ceil(
-      (this.viewport.x + this.canvas.width / this.viewport.scale) / this.theme.tileSize
+    const gridSize = this.previewState.gridSize || this.theme.tileSize;
+    const startX = Math.max(0, Math.floor(this.viewport.x / gridSize));
+    const startY = Math.max(0, Math.floor(this.viewport.y / gridSize));
+    const endX = Math.min(
+      this.map.width * (this.theme.tileSize / gridSize),
+      Math.ceil((this.viewport.x + this.canvas.width / this.viewport.scale) / gridSize)
     );
-    const endY = Math.ceil(
-      (this.viewport.y + this.canvas.height / this.viewport.scale) / this.theme.tileSize
+    const endY = Math.min(
+      this.map.height * (this.theme.tileSize / gridSize),
+      Math.ceil((this.viewport.y + this.canvas.height / this.viewport.scale) / gridSize)
     );
 
     this.ctx.strokeStyle = this.theme.gridColor;
     this.ctx.lineWidth = 0.5;
 
-    // Vertical lines
     for (let x = startX; x <= endX; x++) {
-      const screenX = this.worldToScreen(x * this.theme.tileSize, 0).x;
+      const screenX = this.worldToScreen(x * gridSize, 0).x;
       this.ctx.beginPath();
-      this.ctx.moveTo(screenX, 0);
-      this.ctx.lineTo(screenX, this.canvas.height);
+      this.ctx.moveTo(screenX, Math.max(0, this.worldToScreen(0, 0).y));
+      this.ctx.lineTo(
+        screenX,
+        Math.min(this.canvas.height, this.worldToScreen(0, this.map.height * this.theme.tileSize).y)
+      );
       this.ctx.stroke();
     }
 
-    // Horizontal lines
     for (let y = startY; y <= endY; y++) {
-      const screenY = this.worldToScreen(0, y * this.theme.tileSize).y;
+      const screenY = this.worldToScreen(0, y * gridSize).y;
       this.ctx.beginPath();
-      this.ctx.moveTo(0, screenY);
-      this.ctx.lineTo(this.canvas.width, screenY);
+      this.ctx.moveTo(Math.max(0, this.worldToScreen(0, 0).x), screenY);
+      this.ctx.lineTo(
+        Math.min(this.canvas.width, this.worldToScreen(this.map.width * this.theme.tileSize, 0).x),
+        screenY
+      );
       this.ctx.stroke();
     }
   }
 
-  /**
-   * Setup event listeners
-   */
   private setupEventListeners() {
-    this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
-    this.canvas.addEventListener('wheel', (e) => this.onWheel(e));
-    this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
+    this.canvas.addEventListener('mousemove', this.boundMouseMove);
+    this.canvas.addEventListener('wheel', this.boundWheel, { passive: false });
+    this.canvas.addEventListener('mousedown', this.boundMouseDown);
   }
 
-  /**
-   * Mouse move handler - update hover state
-   */
   private onMouseMove(e: MouseEvent) {
     const rect = this.canvas.getBoundingClientRect();
     this.mousePos = {
@@ -332,9 +551,6 @@ export class MapCanvas {
     this.hoveredEntityId = entity?.id ?? null;
   }
 
-  /**
-   * Wheel handler - zoom
-   */
   private onWheel(e: WheelEvent) {
     e.preventDefault();
     const factor = e.deltaY > 0 ? 0.9 : 1.1;
@@ -346,12 +562,8 @@ export class MapCanvas {
     this.zoom(factor, mousePos);
   }
 
-  /**
-   * Mouse down handler - pan or select
-   */
   private onMouseDown(e: MouseEvent) {
-    if (e.button === 2) {
-      // Right click - pan (handled by dragging)
+    if (e.button === 2 || (e.button === 0 && e.altKey)) {
       let lastX = e.clientX;
       let lastY = e.clientY;
 
@@ -373,10 +585,9 @@ export class MapCanvas {
     }
   }
 
-  /**
-   * Cleanup event listeners
-   */
   public destroy() {
-    // Event listeners will be garbage collected with canvas
+    this.canvas.removeEventListener('mousemove', this.boundMouseMove);
+    this.canvas.removeEventListener('wheel', this.boundWheel);
+    this.canvas.removeEventListener('mousedown', this.boundMouseDown);
   }
 }

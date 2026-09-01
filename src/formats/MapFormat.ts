@@ -8,8 +8,6 @@ import {
   Entity,
   TileMap,
   TileType,
-  Entity as EntityType,
-  getTileKey,
   parseTileKey,
 } from '../entities/types';
 
@@ -28,7 +26,7 @@ export interface MapJSON {
   height: number;
   tileSize: number;
   tiles: Array<[string, string]>; // [key, tileType]
-  entities: EntityType[];
+  entities: Entity[];
   metadata?: {
     author?: string;
     description?: string;
