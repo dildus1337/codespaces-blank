@@ -13,7 +13,6 @@ coverage/
 npm-debug.log*
 yarn-debug.log*
 pnpm-lock.yaml
-package-lock.json
 
 # Doom 2D Forever raw asset sources (external repo, not project source)
 df-assets/
