@@ -4,13 +4,39 @@ import { createMap, createMonster, MonsterType, TileType } from '../entities/typ
 describe('MapCanvas', () => {
   let canvas: HTMLCanvasElement;
   let mapCanvas: MapCanvas;
-  let map: typeof createMap;
+  let map: ReturnType<typeof createMap>;
 
   beforeEach(() => {
     // Create a mock canvas
     canvas = document.createElement('canvas');
     canvas.width = 800;
     canvas.height = 600;
+
+    // Mock getContext to return a 2D context
+    const mockContext = {
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      fillRect: jest.fn(),
+      strokeRect: jest.fn(),
+      beginPath: jest.fn(),
+      moveTo: jest.fn(),
+      lineTo: jest.fn(),
+      stroke: jest.fn(),
+      fill: jest.fn(),
+      clearRect: jest.fn(),
+      fillText: jest.fn(),
+      measureText: jest.fn(() => ({ width: 0 })),
+      drawImage: jest.fn(),
+      save: jest.fn(),
+      restore: jest.fn(),
+      translate: jest.fn(),
+      scale: jest.fn(),
+      rotate: jest.fn(),
+    } as any;
+
+    canvas.getContext = jest.fn(() => mockContext);
+
     map = createMap('Test Map', 100, 100);
     mapCanvas = new MapCanvas(canvas, map);
   });
@@ -144,8 +170,9 @@ describe('MapCanvas', () => {
       mapCanvas.setMap(map);
 
       expect(mapCanvas.getEntityAtPosition(100, 100)).toBe(monster); // Top-left
-      expect(mapCanvas.getEntityAtPosition(131, 131)).toBeNull(); // Just outside
-      expect(mapCanvas.getEntityAtPosition(131.9, 131.9)).toBeNull();
+      expect(mapCanvas.getEntityAtPosition(131, 131)).toBe(monster); // Inside
+      expect(mapCanvas.getEntityAtPosition(131.9, 131.9)).toBe(monster); // Still inside
+      expect(mapCanvas.getEntityAtPosition(132, 132)).toBeNull(); // Just outside
     });
 
     it('should detect topmost entity when overlapping', () => {
