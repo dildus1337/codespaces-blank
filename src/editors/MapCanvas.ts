@@ -1,6 +1,6 @@
 /**
  * Canvas-based map editor implementation for Doom 2D Forever.
- * Handles rendering (tiles, entities, layers, previews, connections) and viewport management.
+ * Uses official Doom 2D Forever sprites, textures, and assets.
  */
 
 import {
@@ -14,11 +14,18 @@ import {
   Spawn,
   Trigger,
 } from '../entities/types';
+import {
+  assetManager,
+  MONSTER_SPRITES,
+  ITEM_SPRITES,
+  SPAWN_SPRITES,
+  TILE_TEXTURES,
+} from '../assets/assetRegistry';
 
 export interface Viewport {
   x: number;
   y: number;
-  scale: number; // zoom level (1.0 = 100%)
+  scale: number;
 }
 
 export interface RenderTheme {
@@ -109,11 +116,15 @@ export class MapCanvas {
       scale: 1.0,
     };
 
+    // Ensure crisp pixel art
+    this.ctx.imageSmoothingEnabled = false;
+
     this.boundMouseMove = (e: MouseEvent) => this.onMouseMove(e);
     this.boundWheel = (e: WheelEvent) => this.onWheel(e);
     this.boundMouseDown = (e: MouseEvent) => this.onMouseDown(e);
 
     this.setupEventListeners();
+    assetManager.preloadAll();
   }
 
   public setMap(map: MapData) {
@@ -189,10 +200,10 @@ export class MapCanvas {
   }
 
   public render() {
+    this.ctx.imageSmoothingEnabled = false;
     this.ctx.fillStyle = this.theme.backgroundColor;
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-    // Map bounds background
     const mapTopLeft = this.worldToScreen(0, 0);
     const mapWidth = this.map.width * this.theme.tileSize * this.viewport.scale;
     const mapHeight = this.map.height * this.theme.tileSize * this.viewport.scale;
@@ -200,7 +211,6 @@ export class MapCanvas {
     this.ctx.fillStyle = '#18181c';
     this.ctx.fillRect(mapTopLeft.x, mapTopLeft.y, mapWidth, mapHeight);
 
-    // Outer border of map area
     this.ctx.strokeStyle = '#3f3f46';
     this.ctx.lineWidth = 2;
     this.ctx.strokeRect(mapTopLeft.x, mapTopLeft.y, mapWidth, mapHeight);
@@ -242,13 +252,27 @@ export class MapCanvas {
 
         if (tileType && tileType !== TileType.EMPTY) {
           const screenPos = this.worldToScreen(x * this.theme.tileSize, y * this.theme.tileSize);
-          this.drawStylizedTile(tileType, screenPos.x, screenPos.y, tileSize);
+          this.drawTile(tileType, screenPos.x, screenPos.y, tileSize);
         }
       }
     }
   }
 
-  private drawStylizedTile(type: TileType, x: number, y: number, size: number) {
+  private drawTile(type: TileType, x: number, y: number, size: number) {
+    const texUrl = TILE_TEXTURES[type];
+    const texImg = texUrl ? assetManager.getImage(texUrl) : null;
+
+    if (texImg) {
+      this.ctx.drawImage(texImg, x, y, size, size);
+      if (type === TileType.PLATFORM) {
+        this.ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(x, y, size, size);
+      }
+      return;
+    }
+
+    // Fallback stylized graphics
     const baseColor = this.theme.tileColors[type] || '#555';
     this.ctx.fillStyle = baseColor;
     this.ctx.fillRect(x, y, size, size);
@@ -257,25 +281,15 @@ export class MapCanvas {
       this.ctx.strokeStyle = 'rgba(255,255,255,0.15)';
       this.ctx.lineWidth = 1;
       this.ctx.strokeRect(x + 1, y + 1, size - 2, size - 2);
-      this.ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-      this.ctx.beginPath();
-      this.ctx.moveTo(x, y + size / 2);
-      this.ctx.lineTo(x + size, y + size / 2);
-      this.ctx.stroke();
     } else if (type === TileType.PLATFORM) {
       this.ctx.fillStyle = 'rgba(255,255,255,0.4)';
       this.ctx.fillRect(x, y, size, Math.max(2, size * 0.15));
-      this.ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-      this.ctx.lineWidth = 1;
-      this.ctx.strokeRect(x, y, size, size);
     } else if (type === TileType.LAVA) {
       this.ctx.fillStyle = '#f59e0b';
       this.ctx.fillRect(x + size * 0.1, y + size * 0.2, size * 0.3, size * 0.3);
-      this.ctx.fillRect(x + size * 0.6, y + size * 0.5, size * 0.25, size * 0.25);
     } else if (type === TileType.WATER) {
       this.ctx.fillStyle = 'rgba(255,255,255,0.3)';
       this.ctx.fillRect(x, y + size * 0.2, size, Math.max(1, size * 0.1));
-      this.ctx.fillRect(x, y + size * 0.6, size, Math.max(1, size * 0.1));
     } else if (type === TileType.SPIKE) {
       this.ctx.fillStyle = '#dc2626';
       this.ctx.beginPath();
@@ -284,17 +298,12 @@ export class MapCanvas {
       this.ctx.lineTo(x + size, y + size);
       this.ctx.closePath();
       this.ctx.fill();
-    } else if (type === TileType.TELEPORT) {
-      this.ctx.fillStyle = '#e879f9';
-      this.ctx.beginPath();
-      this.ctx.arc(x + size / 2, y + size / 2, size * 0.35, 0, Math.PI * 2);
-      this.ctx.fill();
     }
   }
 
   private renderTriggerLines() {
     this.ctx.save();
-    this.ctx.setLineDash([4, 4]);
+    if (this.ctx.setLineDash) this.ctx.setLineDash([4, 4]);
     this.ctx.lineWidth = 1.5;
     this.ctx.strokeStyle = '#f59e0b';
 
@@ -330,68 +339,75 @@ export class MapCanvas {
       const isSelected = this.previewState.selectedEntityId === entity.id;
       const isHovered = this.hoveredEntityId === entity.id;
 
-      let bgColor = '#334155';
-      let borderColor = '#64748b';
-      let icon = 'E';
+      let spriteUrl: string | null = null;
       let label: string = entity.type;
 
       if (entity.type === 'monster') {
         const m = entity as Monster;
-        bgColor = '#7f1d1d';
-        borderColor = '#ef4444';
-        icon = '👹';
+        spriteUrl = MONSTER_SPRITES[m.monsterType];
         label = m.monsterType;
       } else if (entity.type === 'item') {
-        const item = entity as Item;
-        bgColor = '#1e3a8a';
-        borderColor = '#3b82f6';
-        icon = '🔫';
-        label = item.itemType;
+        const it = entity as Item;
+        spriteUrl = ITEM_SPRITES[it.itemType];
+        label = it.itemType;
       } else if (entity.type === 'spawn') {
         const sp = entity as Spawn;
-        bgColor = '#14532d';
-        borderColor = '#22c55e';
-        icon = '🚩';
+        spriteUrl = SPAWN_SPRITES[sp.spawnType];
         label = sp.spawnType;
       } else if (entity.type === 'trigger') {
         const tr = entity as Trigger;
-        bgColor = 'rgba(180, 83, 9, 0.4)';
-        borderColor = '#f59e0b';
-        icon = '⚡';
         label = tr.action;
       }
 
-      if (isHovered && !isSelected) {
-        borderColor = this.theme.hoverColor;
-      }
+      const img = spriteUrl ? assetManager.getImage(spriteUrl) : null;
 
-      this.ctx.fillStyle = bgColor;
-      this.ctx.fillRect(screenPos.x, screenPos.y, screenWidth, screenHeight);
+      if (img) {
+        // Draw real Doom 2D Forever sprite!
+        this.ctx.drawImage(img, screenPos.x, screenPos.y, screenWidth, screenHeight);
 
-      this.ctx.strokeStyle = borderColor;
-      this.ctx.lineWidth = isSelected ? 2.5 : 1.5;
-      if (entity.type === 'trigger') {
-        this.ctx.setLineDash([3, 3]);
-      }
-      this.ctx.strokeRect(screenPos.x, screenPos.y, screenWidth, screenHeight);
-      if (this.ctx.setLineDash) this.ctx.setLineDash([]);
-
-      // Entity Icon / Glyph
-      if (screenWidth >= 16 && screenHeight >= 16) {
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.font = `${Math.max(10, Math.min(18, Math.floor(screenWidth * 0.4)))}px sans-serif`;
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
-        this.ctx.fillText(icon, screenPos.x + screenWidth / 2, screenPos.y + screenHeight / 2);
-
-        // Text label
-        if (screenWidth >= 32 && this.viewport.scale >= 0.75) {
-          this.ctx.fillStyle = '#e2e8f0';
-          this.ctx.font = '9px monospace';
-          this.ctx.textAlign = 'center';
-          const shortLabel = label.replace(/^(WEAPON_|AMMO_|HEALTH_|ARMOR_|PLAYER_)/, '');
-          this.ctx.fillText(shortLabel.slice(0, 10), screenPos.x + screenWidth / 2, screenPos.y + screenHeight + 9);
+        if (isHovered || isSelected) {
+          this.ctx.strokeStyle = isSelected ? '#fbbf24' : this.theme.hoverColor;
+          this.ctx.lineWidth = isSelected ? 2 : 1;
+          this.ctx.strokeRect(screenPos.x, screenPos.y, screenWidth, screenHeight);
         }
+      } else {
+        // Fallback badge
+        let bgColor = '#334155';
+        let borderColor = '#64748b';
+
+        if (entity.type === 'monster') {
+          bgColor = '#7f1d1d';
+          borderColor = '#ef4444';
+        } else if (entity.type === 'item') {
+          bgColor = '#1e3a8a';
+          borderColor = '#3b82f6';
+        } else if (entity.type === 'spawn') {
+          bgColor = '#14532d';
+          borderColor = '#22c55e';
+        } else if (entity.type === 'trigger') {
+          bgColor = 'rgba(180, 83, 9, 0.4)';
+          borderColor = '#f59e0b';
+        }
+
+        if (isHovered && !isSelected) {
+          borderColor = this.theme.hoverColor;
+        }
+
+        this.ctx.fillStyle = bgColor;
+        this.ctx.fillRect(screenPos.x, screenPos.y, screenWidth, screenHeight);
+
+        this.ctx.strokeStyle = borderColor;
+        this.ctx.lineWidth = isSelected ? 2 : 1;
+        this.ctx.strokeRect(screenPos.x, screenPos.y, screenWidth, screenHeight);
+      }
+
+      // Short label tag
+      if (screenWidth >= 32 && this.viewport.scale >= 0.75) {
+        this.ctx.fillStyle = '#f8fafc';
+        this.ctx.font = '9px monospace';
+        this.ctx.textAlign = 'center';
+        const shortLabel = label.replace(/^(WEAPON_|AMMO_|HEALTH_|ARMOR_|PLAYER_)/, '');
+        this.ctx.fillText(shortLabel.slice(0, 12), screenPos.x + screenWidth / 2, screenPos.y + screenHeight + 9);
       }
     }
   }
@@ -405,12 +421,10 @@ export class MapCanvas {
     const screenWidth = entity.width * this.viewport.scale;
     const screenHeight = entity.height * this.viewport.scale;
 
-    // Glowing selection outline
     this.ctx.strokeStyle = '#facc15';
     this.ctx.lineWidth = 2;
     this.ctx.strokeRect(screenPos.x - 2, screenPos.y - 2, screenWidth + 4, screenHeight + 4);
 
-    // Corner resize handles
     const handleSize = 6;
     this.ctx.fillStyle = '#fbbf24';
     const corners = [
@@ -486,7 +500,7 @@ export class MapCanvas {
       const sw = w * this.viewport.scale;
       const sh = h * this.viewport.scale;
 
-      this.ctx.fillStyle = 'rgba(34, 197, 94, 0.4)';
+      this.ctx.fillStyle = 'rgba(34, 197, 94, 0.35)';
       this.ctx.fillRect(screenPos.x, screenPos.y, sw, sh);
       this.ctx.strokeStyle = '#22c55e';
       this.ctx.lineWidth = 2;
