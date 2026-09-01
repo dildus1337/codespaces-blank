@@ -1,5 +1,5 @@
 import { useMapStore } from '../state/mapStore';
-import { createMap, TileType, MonsterType, createMonster } from '../entities/types';
+import { TileType, MonsterType, createMonster } from '../entities/types';
 import { createHangarMap, createCyberdemonLairMap } from '../data/presetMaps';
 import { serializeMap, deserializeMap } from '../formats/MapFormat';
 
